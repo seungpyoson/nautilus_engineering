@@ -135,10 +135,38 @@ expect "out-of-order package fails" 1 \
   "${root_fail}
 ${order_error}${failure_footer}" bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
 
+invisible_name=$'alpha\xe2\x80\x8b'
+write_root_manifest "  \"alpha\",
+  \"${invisible_name}\",
+  \"bravo\","
+expect "byte-distinct entries remain distinct" 1 \
+  "${root_fail}
+  Listed in no-build-package but not in lock (1):
+    - ${invisible_name}${failure_footer}" bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
+
+cat > "${repo}/uv.lock" << 'LOCK'
+version = 1
+[[package]]
+name = "*"
+version = "1"
+source = { registry = "https://example.invalid" }
+[[package]]
+name = "?"
+version = "1"
+source = { registry = "https://example.invalid" }
+LOCK
+write_root_manifest '  "?",
+  "*",'
+expect "ordering compares literal strings, not glob patterns" 1 \
+  "${root_fail}
+${order_error}${failure_footer}" bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
+
+write_root_lock
 write_root_manifest '  "alpha",
   "bravo",'
 real_comm=$(command -v comm)
 real_sort=$(command -v sort)
+real_uniq=$(command -v uniq)
 fake_bin="${test_root}/bin"
 mkdir "$fake_bin"
 cat > "${fake_bin}/comm" << 'BASH'
@@ -159,9 +187,18 @@ if [[ "${LC_ALL:-}" != C ]]; then
 fi
 exec "$REAL_SORT" "$@"
 BASH
-chmod +x "${fake_bin}/comm" "${fake_bin}/sort"
-expect "sort and comm explicitly use the C locale" 0 "$root_ok" \
-  env -u LC_ALL REAL_COMM="$real_comm" REAL_SORT="$real_sort" PATH="${fake_bin}:${PATH}" \
+cat > "${fake_bin}/uniq" << 'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${LC_ALL:-}" != C ]]; then
+  echo "uniq did not receive LC_ALL=C" >&2
+  exit 11
+fi
+exec "$REAL_UNIQ" "$@"
+BASH
+chmod +x "${fake_bin}/comm" "${fake_bin}/sort" "${fake_bin}/uniq"
+expect "sort, uniq and comm explicitly use the C locale" 0 "$root_ok" \
+  env -u LC_ALL REAL_COMM="$real_comm" REAL_SORT="$real_sort" REAL_UNIQ="$real_uniq" PATH="${fake_bin}:${PATH}" \
   bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
 
 no_diff_bin="${test_root}/no-diff-bin"
@@ -209,13 +246,46 @@ set -euo pipefail
 if [[ "${1-}" == '-u' ]]; then
   exec "$REAL_SORT" "$@"
 fi
+if [[ "$FAIL_AFTER_OUTPUT" == 1 ]]; then
+  "$REAL_SORT" "$@"
+fi
 echo 'Injected package ordering failure' >&2
 exit 17
 BASH
 chmod +x "${ordering_bin}/sort"
-expect "ordering sort failure propagates" 17 "Injected package ordering failure" \
-  env REAL_SORT="$real_sort" PATH="${ordering_bin}:${PATH}" \
-  bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
+for after_output in 0 1; do
+  expect "ordering sort failure propagates (output=$after_output)" 17 "Injected package ordering failure" \
+    env FAIL_AFTER_OUTPUT="$after_output" REAL_SORT="$real_sort" PATH="${ordering_bin}:${PATH}" \
+    bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
+done
+
+uniq_bin="${test_root}/uniq-bin"
+mkdir "$uniq_bin"
+cat > "${uniq_bin}/uniq" << 'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" != "$FAIL_UNIQ_ARG" ]]; then
+  exec "$REAL_UNIQ" "$@"
+fi
+if [[ "$FAIL_AFTER_OUTPUT" == 1 ]]; then
+  output=$("$REAL_UNIQ" "$@")
+  : "${output:?Expected uniqueness output before failure}"
+  printf '%s\n' "$output"
+fi
+echo 'Injected uniqueness failure' >&2
+exit 19
+BASH
+chmod +x "${uniq_bin}/uniq"
+write_root_manifest '  "alpha",
+  "alpha",
+  "bravo",'
+for uniq_arg in '' '-d'; do
+  for after_output in 0 1; do
+    expect "uniq failure propagates (arg=$uniq_arg, output=$after_output)" 19 "Injected uniqueness failure" \
+      env FAIL_UNIQ_ARG="$uniq_arg" FAIL_AFTER_OUTPUT="$after_output" REAL_UNIQ="$real_uniq" PATH="${uniq_bin}:${PATH}" \
+      bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
+  done
+done
 
 mkdir "${repo}/zero"
 printf 'version = 1\n' > "${repo}/zero/uv.lock"

@@ -132,11 +132,11 @@ for pair in "${pairs[@]}"; do
   locked=$(locked_third_party "$lock")
   declared_raw=$(declared_packages "$manifest")
   declared_ordered=$(printf '%s\n' "$declared_raw" | LC_ALL=C sort)
-  declared_sorted=$(printf '%s\n' "$declared_ordered" | uniq)
+  declared_sorted=$(printf '%s\n' "$declared_ordered" | LC_ALL=C uniq)
 
   missing=$(LC_ALL=C comm -23 <(printf '%s\n' "$locked") <(printf '%s\n' "$declared_sorted"))
   stale=$(LC_ALL=C comm -13 <(printf '%s\n' "$locked") <(printf '%s\n' "$declared_sorted"))
-  duplicates=$(printf '%s\n' "$declared_ordered" | uniq -d)
+  duplicates=$(printf '%s\n' "$declared_ordered" | LC_ALL=C uniq -d)
   out_of_order=""
   if [[ "$declared_raw" != "$declared_ordered" ]]; then
     out_of_order="yes"

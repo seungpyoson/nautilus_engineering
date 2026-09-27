@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/nautilus-make-test.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT
-test_root=$(cd "$test_root" && pwd -P)
+canonical_test_root=$(cd "$test_root" && pwd -P)
+test_root="$canonical_test_root"
 repo="${test_root}/repo"
 linked="${test_root}/linked worktree"
 mkdir -p "${repo}/scripts" "${repo}/tests"
@@ -16,6 +17,28 @@ fail() {
   printf 'FAIL %s\n' "$*" >&2
   exit 1
 }
+
+cleanup_root="${test_root}/cleanup"
+mkdir "$cleanup_root"
+cat > "${test_root}/fail-pwd.bash" << 'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+pwd() {
+  if [[ "${1-}" == -P ]]; then
+    echo 'Injected canonicalization failure' >&2
+    return 79
+  fi
+  builtin pwd "$@"
+}
+BASH
+status=0
+output=$(TMPDIR="$cleanup_root" BASH_ENV="${test_root}/fail-pwd.bash" \
+  bash "${SCRIPT_DIR}/test-make-test.bash" 2>&1) || status=$?
+[[ "$status" == 79 && "$output" == 'Injected canonicalization failure' ]] || fail 'canonicalization failure did not propagate'
+for leftover in "$cleanup_root"/*; do
+  [[ ! -e "$leftover" ]] || fail 'canonicalization failure left its temporary directory'
+done
+echo 'ok   canonicalization failure preserves cleanup and exit status'
 
 # A developer's global hook must not replace the hook exercised by this fixture.
 mkdir "${test_root}/global-hooks"
@@ -30,16 +53,16 @@ chmod +x "${test_root}/global-hooks/pre-commit"
 git config --file "${test_root}/global.gitconfig" core.hooksPath "${test_root}/global-hooks"
 export GIT_CONFIG_GLOBAL="${test_root}/global.gitconfig"
 
-cat > "${repo}/tests/fixture-check.bash" << 'BASH'
+cat > "${repo}/tests/test-fixture-check.bash" << 'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 git_vars=$(git rev-parse --local-env-vars)
-for git_var in $git_vars; do
+while IFS= read -r git_var; do
   if declare -p "$git_var" > /dev/null 2>&1; then
     printf 'Git repository variable leaked: %s\n' "$git_var" >&2
     exit 31
   fi
-done
+done <<< "$git_vars"
 if [[ "$PROBE_FAIL" == 1 ]]; then
   echo 'Injected companion failure' >&2
   exit 23
@@ -71,6 +94,7 @@ git -C "$repo" commit --quiet -m 'Create parent fixture'
 git -C "$repo" worktree add --quiet -b hook-test "$linked"
 parent_head=$(git -C "$repo" rev-parse HEAD)
 parent_index=$(git -C "$repo" write-tree)
+parent_status=$(git -C "$repo" status --porcelain)
 cp "${repo}/.git/config" "${test_root}/parent-config"
 
 cat > "${repo}/.git/hooks/pre-commit" << 'BASH'
@@ -78,7 +102,9 @@ cat > "${repo}/.git/hooks/pre-commit" << 'BASH'
 set -euo pipefail
 : "${GIT_DIR:?Expected a linked-worktree commit hook}"
 : "${GIT_INDEX_FILE:?Expected the commit hook index}"
-exec make --no-print-directory test TEST_FILES=tests/fixture-check.bash
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
+export GIT_COMMON_DIR
+exec make --no-print-directory test
 BASH
 chmod +x "${repo}/.git/hooks/pre-commit"
 
@@ -105,6 +131,8 @@ actual_head=$(git -C "$repo" rev-parse HEAD)
 [[ "$actual_head" == "$parent_head" ]] || fail 'parent branch moved'
 actual_index=$(git -C "$repo" write-tree)
 [[ "$actual_index" == "$parent_index" ]] || fail 'parent index changed'
+actual_status=$(git -C "$repo" status --porcelain)
+[[ "$actual_status" == "$parent_status" ]] || fail 'parent worktree changed'
 cmp "${repo}/.git/config" "${test_root}/parent-config"
 echo 'ok   hook tests commit in a foreign repo without altering the parent'
 
@@ -131,6 +159,9 @@ cat > "${fake_bin}/git" << 'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == 'rev-parse --local-env-vars' ]]; then
+  if [[ "$FAIL_AFTER_OUTPUT" == 1 ]]; then
+    "$REAL_GIT" "$@"
+  fi
   echo 'Injected Git environment lookup failure' >&2
   exit 29
 fi
@@ -142,14 +173,16 @@ cat > "${linked}/tests/should-not-run.bash" << 'BASH'
 set -euo pipefail
 touch "$PROBE_ROOT/should-not-run"
 BASH
-status=0
-PROBE_ROOT="$test_root" REAL_GIT="$real_git" PATH="${fake_bin}:${PATH}" \
-  make --no-print-directory -C "$linked" test TEST_FILES=tests/should-not-run.bash \
-  > "${test_root}/lookup.log" 2>&1 || status=$?
-[[ "$status" == 2 ]] || fail "Git lookup failure returned $status instead of 2"
-grep -Fx 'Injected Git environment lookup failure' "${test_root}/lookup.log"
-[[ ! -e "${test_root}/should-not-run" ]] || fail 'test ran after Git lookup failed'
-echo 'ok   Git environment lookup failure stops the test runner'
+for after_output in 0 1; do
+  status=0
+  PROBE_ROOT="$test_root" FAIL_AFTER_OUTPUT="$after_output" REAL_GIT="$real_git" PATH="${fake_bin}:${PATH}" \
+    make --no-print-directory -C "$linked" test TEST_FILES=tests/should-not-run.bash \
+    > "${test_root}/lookup.log" 2>&1 || status=$?
+  [[ "$status" == 2 ]] || fail "Git lookup failure returned $status instead of 2"
+  grep -Fx 'Injected Git environment lookup failure' "${test_root}/lookup.log"
+  [[ ! -e "${test_root}/should-not-run" ]] || fail 'test ran after Git lookup failed'
+  printf 'ok   Git environment lookup failure stops the test runner (output=%s)\n' "$after_output"
+done
 
 [[ ! -e "${GIT_CONFIG_GLOBAL}.hook-ran" ]] || fail 'inherited global hook ran in a fixture'
 echo 'All make test isolation cases passed'
