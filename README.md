@@ -93,7 +93,8 @@ Make discovers filenames without splitting spaces and stops if Git discovery fai
 To select files explicitly, set `PYTHON_FILES`, `SHELL_FILES`, `TEST_FILES`, or `ACTION_FILES`
 on the command line. These values are shell-word lists; quote filenames containing spaces
 inside the value, for example `make test 'TEST_FILES="tests/test-with space.bash"'`.
-An empty or malformed explicit list fails. No shell expressions are evaluated in these lists.
+An empty or malformed explicit list fails. The runner parses these values without a shell;
+Make still expands its own variable references and functions before passing the values.
 
 Install the local hooks with `prek install`. Run every formatter, linter, and repository check with:
 

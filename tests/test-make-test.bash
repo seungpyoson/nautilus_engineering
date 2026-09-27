@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fixture makes must not inherit the caller's test selection or execution flags.
-unset MAKEFLAGS MFLAGS MAKELEVEL
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=tests/make-environment.bash
+source "${SCRIPT_DIR}/make-environment.bash"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/nautilus-make-test.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT
