@@ -39,9 +39,13 @@ pre-commit:
 
 pre-flight: pre-commit
 
+# Commit-hook Git variables must not redirect commands in fixture repositories.
 test:
 	@test -n "$(strip $(TEST_FILES))" || { echo "No tracked test files found" >&2; exit 1; }
-	@set -e; for test_file in $(TEST_FILES); do \
+	@set -e; \
+	git_local_env=$$(git rev-parse --local-env-vars); \
+	for git_var in $$git_local_env; do unset "$$git_var"; done; \
+	for test_file in $(TEST_FILES); do \
 		printf '\n%s\n' "Running $$test_file"; \
 		bash "$$test_file"; \
 	done
