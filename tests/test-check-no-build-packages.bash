@@ -6,6 +6,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SOURCE_SCRIPT="${REPO_ROOT}/scripts/check-no-build-packages.sh"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/nautilus-no-build-test.XXXXXX")
 trap 'rm -rf "$test_root"' EXIT
+export TMPDIR="${test_root}/checker-tmp"
+mkdir "$TMPDIR"
 repo="${test_root}/repo"
 mkdir -p "${repo}/nested" "${repo}/scripts"
 cp "$SOURCE_SCRIPT" "${repo}/scripts/check-no-build-packages.sh"
@@ -287,6 +289,53 @@ for uniq_arg in '' '-d'; do
   done
 done
 
+discovery_bin="${test_root}/discovery-bin"
+grep_bin="${test_root}/grep-bin"
+mkdir "$discovery_bin" "$grep_bin"
+real_git=$(command -v git)
+real_grep=$(command -v grep)
+cat > "${discovery_bin}/git" << 'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" == ls-files ]]; then
+  if [[ "$FAIL_AFTER_OUTPUT" == 1 ]]; then
+    "$REAL_GIT" "$@"
+  fi
+  echo 'Injected package discovery failure' >&2
+  exit 49
+fi
+exec "$REAL_GIT" "$@"
+BASH
+cat > "${grep_bin}/grep" << 'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" == "$FAIL_GREP_ARG" ]]; then
+  if [[ "$FAIL_AFTER_OUTPUT" == 1 ]]; then
+    "$REAL_GREP" "$@"
+  fi
+  echo 'Injected grep failure' >&2
+  exit 51
+fi
+exec "$REAL_GREP" "$@"
+BASH
+chmod +x "${discovery_bin}/git" "${grep_bin}/grep"
+write_root_manifest '  "alpha",
+  "bravo",'
+for after_output in 0 1; do
+  expect "Git discovery failure rejects partial inventory (output=$after_output)" 49 \
+    'Injected package discovery failure' \
+    env REAL_GIT="$real_git" FAIL_AFTER_OUTPUT="$after_output" PATH="${discovery_bin}:${PATH}" \
+    bash "$CHECK_SCRIPT"
+  expect "policy lookup failure rejects discovery (output=$after_output)" 51 \
+    'Injected grep failure' \
+    env REAL_GREP="$real_grep" FAIL_GREP_ARG=-q FAIL_AFTER_OUTPUT="$after_output" \
+    PATH="${grep_bin}:${PATH}" bash "$CHECK_SCRIPT"
+  expect "count failure rejects valid policy (output=$after_output)" 51 \
+    'Injected grep failure' \
+    env REAL_GREP="$real_grep" FAIL_GREP_ARG=-c FAIL_AFTER_OUTPUT="$after_output" \
+    PATH="${grep_bin}:${PATH}" bash "$CHECK_SCRIPT" --pair uv.lock:pyproject.toml
+done
+
 mkdir "${repo}/zero"
 printf 'version = 1\n' > "${repo}/zero/uv.lock"
 printf '[tool.uv]\nno-build-package = [\n]\n' > "${repo}/zero/pyproject.toml"
@@ -309,7 +358,8 @@ mkdir -p "${empty_repo}/scripts"
 cp "$SOURCE_SCRIPT" "${empty_repo}/scripts/check-no-build-packages.sh"
 git -C "$empty_repo" init --quiet
 printf '[project]\nname = "empty"\nversion = "0.1.0"\n' > "${empty_repo}/pyproject.toml"
-git -C "$empty_repo" add pyproject.toml
+printf 'version = 1\n' > "${empty_repo}/uv.lock"
+git -C "$empty_repo" add pyproject.toml uv.lock
 status=0
 output=$(cd "$empty_repo" && bash scripts/check-no-build-packages.sh 2>&1) || status=$?
 if [[ "$status" == 0 && "$output" == "No tracked uv.lock has a no-build-package policy." ]]; then
@@ -318,6 +368,13 @@ else
   printf 'FAIL no-policy repository: exit %s\n%s\n' "$status" "$output" >&2
   failures=$((failures + 1))
 fi
+
+for leftover in "$TMPDIR"/*; do
+  if [[ -e "$leftover" || -L "$leftover" ]]; then
+    printf 'FAIL checker left a temporary path: %s\n' "$leftover" >&2
+    failures=$((failures + 1))
+  fi
+done
 
 if ((failures > 0)); then
   printf '\n%s no-build-package test(s) failed\n' "$failures" >&2

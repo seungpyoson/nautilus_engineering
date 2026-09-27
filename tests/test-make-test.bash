@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Fixture makes must not inherit the caller's test selection or execution flags.
+unset MAKEFLAGS MFLAGS MAKELEVEL
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/nautilus-make-test.XXXXXX")
@@ -11,7 +14,7 @@ repo="${test_root}/repo"
 linked="${test_root}/linked worktree"
 mkdir -p "${repo}/scripts" "${repo}/tests"
 cp "${REPO_ROOT}/Makefile" "${REPO_ROOT}/tools.toml" "$repo/"
-cp "${REPO_ROOT}/scripts/tool-version.sh" "${repo}/scripts/"
+cp "${REPO_ROOT}/scripts/tool-version.sh" "${REPO_ROOT}/scripts/run-make-check.py" "${repo}/scripts/"
 
 fail() {
   printf 'FAIL %s\n' "$*" >&2
@@ -29,6 +32,10 @@ pwd() {
     return 79
   fi
   builtin pwd "$@"
+}
+bash() {
+  echo 'Unexpected nested canonicalization probe' >&2
+  return 80
 }
 BASH
 status=0

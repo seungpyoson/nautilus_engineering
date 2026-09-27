@@ -81,16 +81,29 @@ declared_packages() {
 }
 
 if ((${#pairs[@]} == 0)); then
+  for tool in mktemp rm; do
+    command -v "$tool" > /dev/null || {
+      echo "Required tool not on PATH: $tool" >&2
+      exit 2
+    }
+  done
+  discovery_root=$(mktemp -d "${TMPDIR:-/tmp}/nautilus-no-build-discovery.XXXXXX")
+  trap 'rm -rf "$discovery_root"' EXIT
+  git ls-files -z > "${discovery_root}/tracked"
   while IFS= read -r -d '' lock; do
     [[ "$lock" == "uv.lock" || "$lock" == */uv.lock ]] || continue
     manifest="$(dirname "$lock")/pyproject.toml"
     if [[ "$manifest" == "./pyproject.toml" ]]; then
       manifest=pyproject.toml
     fi
-    if [[ -f "$manifest" ]] && grep -q '^[[:space:]]*no-build-package[[:space:]]*=' "$manifest"; then
+    [[ -f "$manifest" ]] || continue
+    if grep -q '^[[:space:]]*no-build-package[[:space:]]*=' "$manifest"; then
       pairs+=("${lock}:${manifest}")
+    else
+      status=$?
+      [[ "$status" == 1 ]] || exit "$status"
     fi
-  done < <(git ls-files -z)
+  done < "${discovery_root}/tracked"
 fi
 
 if ((${#pairs[@]} == 0)); then
@@ -143,7 +156,11 @@ for pair in "${pairs[@]}"; do
   fi
 
   if [[ -z "$missing" && -z "$stale" && -z "$duplicates" && -z "$out_of_order" ]]; then
-    count=$(printf '%s\n' "$locked" | grep -c . || true)
+    count_status=0
+    count=$(grep -c . <<< "$locked") || count_status=$?
+    if ((count_status > 1)); then
+      exit "$count_status"
+    fi
     echo "OK  ${manifest}: ${count} packages, in sync with ${lock}"
     continue
   fi
