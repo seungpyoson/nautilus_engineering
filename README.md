@@ -96,6 +96,13 @@ For a faster loop, run only the syntax checks, tool-pin validation, and reposito
 make check
 ```
 
+Make discovers filenames without splitting spaces and stops if Git discovery fails.
+To select files explicitly, set `PYTHON_FILES`, `SHELL_FILES`, `TEST_FILES`, or `ACTION_FILES`
+on the command line. These values are shell-word lists; quote filenames containing spaces
+inside the value, for example `make test 'TEST_FILES="tests/test-with space.bash"'`.
+An empty or malformed explicit list fails. The runner parses these values without a shell;
+Make still expands its own variable references and functions before passing the values.
+
 This repository has no dependency graph to audit. Its tests instead exercise the shared
 supply-chain runner, installer, exact version checks, policy validation, and secondary dependency
 paths with controlled fixtures. Every maintained script has behavioral coverage, and CI runs every
