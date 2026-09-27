@@ -2,7 +2,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=tests/make-environment.bash
+# The helper is linted separately; staged-file hooks may omit it from their inputs.
+# shellcheck source=tests/make-environment.bash disable=SC1091
 source "${SCRIPT_DIR}/make-environment.bash"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/nautilus-make-files.XXXXXX")

@@ -102,7 +102,10 @@ jobs:
             exit 1
           fi
           mapfile -t shell_files <<< "${shell_file_output}"
-          shellcheck "${shell_files[@]}"
+          # Match staged-file hooks, where a sourced helper may not be an input.
+          for shell_file in "${shell_files[@]}"; do
+            shellcheck "$shell_file"
+          done
           "${RUNNER_TEMP}/bin/shfmt" -d -i 2 -ci -sr -ln bash "${shell_files[@]}"
 
   config-lint:
